@@ -1,0 +1,43 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.tf'  # Trigger only on changes to .tf files
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '**.tf'
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # For AWS or other cloud auth if needed
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 4.61.0  # Use your Terraform version
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request'  # Run plan on PRs
+        run: terraform plan -out=plan.tfout
+
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # Apply only on push to main
+        run: terraform apply -auto-approve
