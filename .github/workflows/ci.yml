@@ -1,4 +1,4 @@
-name: Terraform CI/CD
+name: Terraform CI/CD with Cost Estimation
 
 on:
   push:
@@ -12,9 +12,70 @@ env:
   S3_BACKEND_BUCKET: 'w7-jr-terr-bucket321'
 
 jobs:
+  terraform-cost:
+    name: Terraform Cost Estimation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Install Infracost
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ env.S3_BACKEND_BUCKET }}"
+
+      - name: Generate Infracost cost estimate
+        id: infracost
+        run: |
+          infracost breakdown --path . \
+            --format table \
+            --out-file infracost-report.md
+          
+          # For GitHub PR comments
+          infracost comment github --path . \
+            --repo $GITHUB_REPOSITORY \
+            --pull-request ${{ github.event.pull_request.number }} \
+            --github-token ${{ secrets.GITHUB_TOKEN }} \
+            --behavior update
+
+      - name: Upload Infracost report
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-report
+          path: infracost-report.md
+          retention-days: 7
+
+  terraform-security-scan:
+    name: Terraform Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy Configuration Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
   terraform-validate:
     name: Terraform Validate & Plan
     runs-on: ubuntu-latest
+    needs: [terraform-cost, terraform-security-scan]
     environment: development
     
     steps:
@@ -36,11 +97,11 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ env.S3_BACKEND_BUCKET }}"
 
-      - name: Terraform Format
-        run: terraform fmt -recursive
-
       - name: Terraform Validate
         run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
 
       - name: Terraform Plan
         run: terraform plan -out=tfplan
