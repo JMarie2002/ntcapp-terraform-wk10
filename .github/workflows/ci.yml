@@ -6,20 +6,26 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
 env:
   TF_VERSION: '1.5.0'
   AWS_REGION: 'us-east-1'
-  S3_BACKEND_BUCKET: 'w7-jr-terr-bucket321' # Replace with your actual bucket
+  S3_BACKEND_BUCKET: 'w7-jr-terr-bucket321'
 
 jobs:
   terraform-security-scan:
     name: Terraform Security Scan
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run TFSec
+      - name: Run Trivy Configuration Scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
@@ -27,22 +33,24 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
 
-      - name: Upload TFSec results
+      - name: Upload Trivy SARIF results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
+          wait-for-processing: true
 
-      - name: Run Checkov
+      - name: Run Checkov Scan
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
           output_format: sarif
           output_file_path: checkov-results.sarif
 
-      - name: Upload Checkov results
+      - name: Upload Checkov SARIF results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'checkov-results.sarif'
+          wait-for-processing: true
 
   terraform-validate:
     name: Terraform Validate & Plan
@@ -81,8 +89,6 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: terraform plan -out=tfplan
-        env:
-          TF_CLI_ARGS: "-no-color"
 
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
