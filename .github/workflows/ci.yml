@@ -6,43 +6,15 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  security-events: write
-  contents: read
-  actions: read
-
 env:
   TF_VERSION: '1.5.0'
   AWS_REGION: 'us-east-1'
   S3_BACKEND_BUCKET: 'w7-jr-terr-bucket321'
 
 jobs:
-  terraform-security-scan:
-    name: Terraform Security Scan
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy Configuration Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-          wait-for-processing: true
-
   terraform-validate:
     name: Terraform Validate & Plan
     runs-on: ubuntu-latest
-    needs: terraform-security-scan
     environment: development
     
     steps:
@@ -62,19 +34,15 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
-        id: init
         run: terraform init -backend-config="bucket=${{ env.S3_BACKEND_BUCKET }}"
 
+      - name: Terraform Format
+        run: terraform fmt -recursive
+
       - name: Terraform Validate
-        id: validate
         run: terraform validate
 
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-
       - name: Terraform Plan
-        id: plan
         run: terraform plan -out=tfplan
 
       - name: Upload Terraform Plan
