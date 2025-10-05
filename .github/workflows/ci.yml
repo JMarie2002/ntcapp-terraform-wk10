@@ -2,23 +2,54 @@ name: Terraform CI/CD
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - '**.tf'  # Trigger only on changes to .tf files
+    branches: [ main, develop ]
   pull_request:
-    branches:
-      - main
-    paths:
-      - '**.tf'
+    branches: [ main ]
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-east-1'
+  S3_BACKEND_BUCKET: 'w7-jr-terr-bucket321' # Replace with your actual bucket
 
 jobs:
-  terraform:
+  terraform-security-scan:
+    name: Terraform Security Scan
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # For AWS or other cloud auth if needed
-      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Run TFSec
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload TFSec results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'checkov-results.sarif'
+
+  terraform-validate:
+    name: Terraform Validate & Plan
+    runs-on: ubuntu-latest
+    needs: terraform-security-scan
+    environment: development
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,18 +57,73 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 4.61.0  # Use your Terraform version
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
-        run: terraform init
+        id: init
+        run: terraform init -backend-config="bucket=${{ env.S3_BACKEND_BUCKET }}"
 
       - name: Terraform Validate
+        id: validate
         run: terraform validate
 
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+
       - name: Terraform Plan
-        if: github.event_name == 'pull_request'  # Run plan on PRs
-        run: terraform plan -out=plan.tfout
+        id: plan
+        run: terraform plan -out=tfplan
+        env:
+          TF_CLI_ARGS: "-no-color"
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: tfplan
+          retention-days: 1
+
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+    environment: production
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ env.S3_BACKEND_BUCKET }}"
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
 
       - name: Terraform Apply
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # Apply only on push to main
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Load Balancer DNS
+        run: terraform output lb-dns
